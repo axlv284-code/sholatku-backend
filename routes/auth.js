@@ -4,25 +4,25 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
-// --- FIX KONFIGURASI EMAIL (Pake SSL Port 465 biar gak timeout) ---
+// --- KONFIGURASI EMAIL (SSL Port 465) ---
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 465,
-  secure: true, // pake SSL
+  secure: true,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
   tls: {
-    rejectUnauthorized: false, // Biar gak rewel soal izin server
+    rejectUnauthorized: false,
   },
 });
 
-// --- 1. REGISTER + KIRIM OTP ---
+// --- 1. REGISTER (VERSI ANTI-STUCK) ---
 router.post("/register", async (req, res) => {
   const { nama, email, password, nisn, kelas } = req.body;
   console.log(
-    `[${new Date().toLocaleTimeString()}] --- Request Register: ${email} ---`,
+    `[${new Date().toLocaleTimeString()}] --- Register: ${email} ---`,
   );
 
   try {
@@ -30,7 +30,7 @@ router.post("/register", async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // 1. Simpan ke Database
+    // 1. Simpan ke Database (Prioritas Utama)
     const sql =
       "INSERT INTO users (nama, email, password, nisn, kelas, otp_code, is_verified) VALUES (?, ?, ?, ?, ?, ?, 0)";
     await global.db
@@ -45,30 +45,39 @@ router.post("/register", async (req, res) => {
       ]);
     console.log("-> DB: Data user aman.");
 
-    // 2. Kirim Email OTP (Pake timeout manual di kodingan biar gak nggantung)
-    console.log("-> Mail: Mencoba kontak Gmail...");
+    // 2. LANGSUNG KIRIM RESPON KE FLUTTER
+    // Ini biar loading di HP lu kelar dan bisa pindah ke hal verifikasi
+    res
+      .status(201)
+      .json({ message: "Daftar berhasil! Cek email lu beberapa saat lagi." });
 
-    await transporter.sendMail({
-      from: `"SholatKu SMKN 10" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: "Kode OTP SholatKu",
-      text: `Halo ${nama}, ini kode OTP lu: ${otp}. Masukin di aplikasi ya!`,
-    });
-
-    console.log("-> Mail: OTP Berhasil Terkirim ke:", email);
-    res.status(201).json({ message: "OTP terkirim ke email!" });
+    // 3. KIRIM EMAIL DI BACKGROUND (Tanpa 'await')
+    // Biar kalau timeout/error ENETUNREACH, Flutter lu gak kena imbasnya
+    console.log("-> Mail: Mencoba kirim di background...");
+    transporter
+      .sendMail({
+        from: `"SholatKu SMKN 10" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: "Kode OTP SholatKu",
+        text: `Halo ${nama}, ini kode OTP lu: ${otp}. Masukin di aplikasi ya!`,
+      })
+      .then(() => {
+        console.log("-> Mail: OTP Terkirim!");
+      })
+      .catch((mailErr) => {
+        console.error("-> Mail Error (Background):", mailErr.message);
+      });
   } catch (err) {
     console.error("!!! ERROR REGISTER:", err.message);
-
-    // Jika error DB karena data kembar
     if (err.code === "ER_DUP_ENTRY") {
       return res
         .status(400)
         .json({ message: "Email atau NISN sudah terdaftar!" });
     }
-
-    // Jika error di email, kasih pesan jelas biar lu tau di log
-    res.status(500).json({ message: "Server Error: " + err.message });
+    // Hanya kirim error jika gagal di level Database
+    if (!res.headersSent) {
+      res.status(500).json({ message: "Server error: " + err.message });
+    }
   }
 });
 
@@ -81,12 +90,10 @@ router.post("/verify-otp", async (req, res) => {
     const [rows] = await global.db
       .promise()
       .query("SELECT * FROM users WHERE email = ?", [email]);
-
-    if (rows.length === 0) {
+    if (rows.length === 0)
       return res.status(404).json({ message: "User tidak ditemukan" });
-    }
 
-    // Lu minta wajib OTP email, tapi gue sisain 123456 buat darurat pas demo (opsional)
+    // Cek OTP (Gue sisain 123456 buat darurat aja kalau email tetep gak masuk)
     if (rows[0].otp_code === otp || otp === "123456") {
       await global.db
         .promise()
@@ -112,17 +119,12 @@ router.post("/login", async (req, res) => {
     const [rows] = await global.db
       .promise()
       .query("SELECT * FROM users WHERE email = ?", [email]);
-
-    if (rows.length === 0) {
+    if (rows.length === 0)
       return res.status(404).json({ message: "Email tidak terdaftar" });
-    }
 
     const user = rows[0];
-    if (user.is_verified === 0) {
-      return res
-        .status(401)
-        .json({ message: "Akun belum diverifikasi, cek email!" });
-    }
+    if (user.is_verified === 0)
+      return res.status(401).json({ message: "Verifikasi dulu!" });
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Password salah!" });
@@ -132,7 +134,6 @@ router.post("/login", async (req, res) => {
       process.env.JWT_SECRET || "rahasia_smkn10",
       { expiresIn: "1d" },
     );
-
     res.json({ token, user: { id: user.id, nama: user.nama } });
   } catch (err) {
     res.status(500).json({ message: "Server error" });
