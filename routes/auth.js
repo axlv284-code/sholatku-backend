@@ -2,42 +2,48 @@ const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer"); // Cukup satu deklarasi di sini
+const { google } = require("googleapis");
 
-// Set up transporter pake OAuth2
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    type: "OAuth2",
-    user: "sholatkuapp@gmail.com",
-    clientId: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
-  },
-});
+// Konfigurasi Gmail API
+const authClient = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  "https://developers.google.com/oauthplayground",
+);
 
-// Verifikasi koneksi (biar muncul di log Railway kalau berhasil)
-transporter.verify((error, success) => {
-  if (error) {
-    console.log("Yah, OAuth gagal: ", error.message);
-  } else {
-    console.log("MANTAP! Server siap kirim OTP lewat jalur API Gmail!");
-  }
-});
+authClient.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+const gmail = google.gmail({ version: "v1", auth: authClient });
 
-// --- 1. REGISTER (VERSI ANTI-STUCK) ---
+// Fungsi Kirim Email via HTTP (Gak bakal kena ENETUNREACH)
+async function sendMailViaAPI(to, subject, body) {
+  const message = [
+    `To: ${to}`,
+    "Content-Type: text/html; charset=utf-8",
+    "MIME-Version: 1.0",
+    `Subject: ${subject}`,
+    "",
+    body,
+  ].join("\n");
+
+  const encodedMessage = Buffer.from(message)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  return gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw: encodedMessage },
+  });
+}
+
+// --- 1. REGISTER ---
 router.post("/register", async (req, res) => {
   const { nama, email, password, nisn, kelas } = req.body;
-  console.log(
-    `[${new Date().toLocaleTimeString()}] --- Register: ${email} ---`,
-  );
-
   try {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 1. Simpan ke Database (Prioritas Utama)
     const sql =
       "INSERT INTO users (nama, email, password, nisn, kelas, otp_code, is_verified) VALUES (?, ?, ?, ?, ?, ?, 0)";
     await global.db
@@ -50,61 +56,41 @@ router.post("/register", async (req, res) => {
         kelas || null,
         otp,
       ]);
-    console.log("-> DB: Data user aman.");
 
-    // 2. LANGSUNG KIRIM RESPON KE FLUTTER
-    res
-      .status(201)
-      .json({ message: "Daftar berhasil! Cek email lu beberapa saat lagi." });
+    // Kirim Respon ke Flutter biar gak loading terus
+    res.status(201).json({ message: "Daftar berhasil! Cek email lu." });
 
-    // 3. KIRIM EMAIL DI BACKGROUND
-    console.log("-> Mail: Mencoba kirim OTP...");
-    transporter
-      .sendMail({
-        from: `"SholatKu SMKN 10" <sholatkuapp@gmail.com>`,
-        to: email,
-        subject: "Kode OTP SholatKu",
-        text: `Halo ${nama}, ini kode OTP lu: ${otp}. Masukin di aplikasi ya!`,
-      })
-      .then(() => console.log(`-> Mail: OTP Terkirim ke ${email}!`))
-      .catch((mailErr) =>
-        console.error("-> Mail Error (API):", mailErr.message),
-      );
+    // Kirim Email via API (Jalur HTTP Aman)
+    sendMailViaAPI(
+      email,
+      "Kode OTP SholatKu",
+      `Halo ${nama}, kode OTP lu: <b>${otp}</b>`,
+    )
+      .then(() => console.log("-> GOKIL! Email tembus via API!"))
+      .catch((e) => console.log("-> API Gmail Error:", e.message));
   } catch (err) {
-    console.error("!!! ERROR REGISTER:", err.message);
-    if (err.code === "ER_DUP_ENTRY") {
-      return res
-        .status(400)
-        .json({ message: "Email atau NISN sudah terdaftar!" });
-    }
-    if (!res.headersSent) {
-      res.status(500).json({ message: "Server error: " + err.message });
-    }
+    console.error("ERROR:", err.message);
+    if (!res.headersSent) res.status(500).json({ message: err.message });
   }
 });
 
-// --- 2. VERIFIKASI OTP ---
+// --- 2. VERIFIKASI OTP (Tetep ada backdoor 123456 buat jaga-jaga) ---
 router.post("/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
   try {
     const [rows] = await global.db
       .promise()
       .query("SELECT * FROM users WHERE email = ?", [email]);
-    if (rows.length === 0)
-      return res.status(404).json({ message: "User tidak ditemukan" });
-
-    // Pake backdoor 123456 buat jaga-jaga demo
-    if (rows[0].otp_code === otp || otp === "123456") {
+    if (rows.length > 0 && (rows[0].otp_code === otp || otp === "123456")) {
       await global.db
         .promise()
         .query(
           "UPDATE users SET is_verified = 1, otp_code = NULL WHERE email = ?",
           [email],
         );
-      res.status(200).json({ message: "Berhasil verifikasi!" });
-    } else {
-      res.status(400).json({ message: "Kode OTP salah!" });
+      return res.status(200).json({ message: "Berhasil!" });
     }
+    res.status(400).json({ message: "OTP Salah!" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -118,23 +104,20 @@ router.post("/login", async (req, res) => {
       .promise()
       .query("SELECT * FROM users WHERE email = ?", [email]);
     if (rows.length === 0)
-      return res.status(404).json({ message: "Email tidak terdaftar" });
-
+      return res.status(404).json({ message: "Email tdk ada" });
     const user = rows[0];
     if (user.is_verified === 0)
       return res.status(401).json({ message: "Verifikasi dulu!" });
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Password salah!" });
-
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(400).json({ message: "Password salah!" });
     const token = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET || "rahasia_smkn10",
+      { id: user.id },
+      process.env.JWT_SECRET || "rahasia",
       { expiresIn: "1d" },
     );
     res.json({ token, user: { id: user.id, nama: user.nama } });
   } catch (err) {
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Error" });
   }
 });
 
