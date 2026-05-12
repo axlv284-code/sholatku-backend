@@ -4,9 +4,8 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
-// --- KONFIGURASI EMAIL (SSL Port 465) ---
 const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
+  host: "74.125.200.108", // Ini IP IPv4 langsung buat smtp.gmail.com
   port: 465,
   secure: true,
   auth: {
@@ -14,6 +13,7 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS,
   },
   tls: {
+    servername: "smtp.gmail.com", // Wajib ada ini biar sertifikat SSL-nya cocok
     rejectUnauthorized: false,
   },
 });
