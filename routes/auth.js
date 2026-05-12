@@ -5,9 +5,9 @@ const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
 const transporter = nodemailer.createTransport({
-  host: "74.125.200.108", // Ini IP IPv4 langsung buat smtp.gmail.com
+  host: "64.233.184.108", // Ini IP IPv4 langsung buat smtp.gmail.com
   port: 465,
-  secure: true,
+  secure: false,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
