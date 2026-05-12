@@ -2,9 +2,7 @@ const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
-
-const nodemailer = require("nodemailer");
+const nodemailer = require("nodemailer"); // Cukup satu deklarasi di sini
 
 // Set up transporter pake OAuth2
 const transporter = nodemailer.createTransport({
@@ -21,7 +19,7 @@ const transporter = nodemailer.createTransport({
 // Verifikasi koneksi (biar muncul di log Railway kalau berhasil)
 transporter.verify((error, success) => {
   if (error) {
-    console.log("Yah, OAuth gagal: ", error);
+    console.log("Yah, OAuth gagal: ", error.message);
   } else {
     console.log("MANTAP! Server siap kirim OTP lewat jalur API Gmail!");
   }
@@ -55,27 +53,23 @@ router.post("/register", async (req, res) => {
     console.log("-> DB: Data user aman.");
 
     // 2. LANGSUNG KIRIM RESPON KE FLUTTER
-    // Ini biar loading di HP lu kelar dan bisa pindah ke hal verifikasi
     res
       .status(201)
       .json({ message: "Daftar berhasil! Cek email lu beberapa saat lagi." });
 
-    // 3. KIRIM EMAIL DI BACKGROUND (Tanpa 'await')
-    // Biar kalau timeout/error ENETUNREACH, Flutter lu gak kena imbasnya
-    console.log("-> Mail: Mencoba kirim di background...");
+    // 3. KIRIM EMAIL DI BACKGROUND
+    console.log("-> Mail: Mencoba kirim OTP...");
     transporter
       .sendMail({
-        from: `"SholatKu SMKN 10" <${process.env.EMAIL_USER}>`,
+        from: `"SholatKu SMKN 10" <sholatkuapp@gmail.com>`,
         to: email,
         subject: "Kode OTP SholatKu",
         text: `Halo ${nama}, ini kode OTP lu: ${otp}. Masukin di aplikasi ya!`,
       })
-      .then(() => {
-        console.log("-> Mail: OTP Terkirim!");
-      })
-      .catch((mailErr) => {
-        console.error("-> Mail Error (Background):", mailErr.message);
-      });
+      .then(() => console.log(`-> Mail: OTP Terkirim ke ${email}!`))
+      .catch((mailErr) =>
+        console.error("-> Mail Error (API):", mailErr.message),
+      );
   } catch (err) {
     console.error("!!! ERROR REGISTER:", err.message);
     if (err.code === "ER_DUP_ENTRY") {
@@ -83,7 +77,6 @@ router.post("/register", async (req, res) => {
         .status(400)
         .json({ message: "Email atau NISN sudah terdaftar!" });
     }
-    // Hanya kirim error jika gagal di level Database
     if (!res.headersSent) {
       res.status(500).json({ message: "Server error: " + err.message });
     }
@@ -93,8 +86,6 @@ router.post("/register", async (req, res) => {
 // --- 2. VERIFIKASI OTP ---
 router.post("/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
-  console.log(`[${new Date().toLocaleTimeString()}] Verifikasi OTP: ${email}`);
-
   try {
     const [rows] = await global.db
       .promise()
@@ -102,7 +93,7 @@ router.post("/verify-otp", async (req, res) => {
     if (rows.length === 0)
       return res.status(404).json({ message: "User tidak ditemukan" });
 
-    // Cek OTP (Gue sisain 123456 buat darurat aja kalau email tetep gak masuk)
+    // Pake backdoor 123456 buat jaga-jaga demo
     if (rows[0].otp_code === otp || otp === "123456") {
       await global.db
         .promise()
@@ -110,13 +101,11 @@ router.post("/verify-otp", async (req, res) => {
           "UPDATE users SET is_verified = 1, otp_code = NULL WHERE email = ?",
           [email],
         );
-      console.log("-> Verifikasi SUKSES!");
       res.status(200).json({ message: "Berhasil verifikasi!" });
     } else {
       res.status(400).json({ message: "Kode OTP salah!" });
     }
   } catch (err) {
-    console.error("ERROR VERIFY:", err.message);
     res.status(500).json({ message: err.message });
   }
 });
