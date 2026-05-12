@@ -1,0 +1,35 @@
+### Variabel
+@url = http://localhost:3000
+
+### 1. Tes Register (Daftar Akun Baru)
+POST {{url}}/api/auth/register
+Content-Type: application/json
+
+{
+    "nama": "Axl Test",
+    "email": "axl@test.com",
+    "password": "123",
+    "nisn": "24362",
+    "kelas": "11 RPL"
+}
+
+### 2. Tes Login (Ambil Token JWT)
+POST {{url}}/api/auth/login
+Content-Type: application/json
+
+{
+    "email": "axl@test.com",
+    "password": "123"
+}
+### 3. Tes Absen (Pakai Token JWT)
+# Copy token yang kamu dapet dari hasil Login tadi ke sini
+@my_token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwiZW1haWwiOiJheGxAdGVzdC5jb20iLCJpYXQiOjE3Nzg0MjExNzEsImV4cCI6MTc3ODUwNzU3MX0.XQWsTqR-IFpFOwyolrUfFDCKgxSj0olcZCvS6WnQeFM
+
+POST {{url}}/api/presensi/absen
+Authorization: {{my_token}}
+Content-Type: application/json
+
+{
+    "jenis_sholat": "Dzuhur",
+    "lokasi": "-7.1234, 110.5678"
+}
