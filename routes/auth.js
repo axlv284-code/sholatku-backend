@@ -4,18 +4,27 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
+const nodemailer = require("nodemailer");
+
+// Set up transporter pake OAuth2
 const transporter = nodemailer.createTransport({
-  host: "64.233.184.108", // Ini IP IPv4 langsung buat smtp.gmail.com
-  port: 465,
-  secure: false,
+  service: "gmail",
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    type: "OAuth2",
+    user: "sholatkuapp@gmail.com",
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
   },
-  tls: {
-    servername: "smtp.gmail.com", // Wajib ada ini biar sertifikat SSL-nya cocok
-    rejectUnauthorized: false,
-  },
+});
+
+// Verifikasi koneksi (biar muncul di log Railway kalau berhasil)
+transporter.verify((error, success) => {
+  if (error) {
+    console.log("Yah, OAuth gagal: ", error);
+  } else {
+    console.log("MANTAP! Server siap kirim OTP lewat jalur API Gmail!");
+  }
 });
 
 // --- 1. REGISTER (VERSI ANTI-STUCK) ---
