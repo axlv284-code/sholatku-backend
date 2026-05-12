@@ -4,12 +4,17 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
-// Konfigurasi Email
+// --- FIX KONFIGURASI EMAIL (Pake SSL Port 465 biar gak timeout) ---
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true, // pake SSL
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false, // Biar gak rewel soal izin server
   },
 });
 
@@ -17,9 +22,8 @@ const transporter = nodemailer.createTransport({
 router.post("/register", async (req, res) => {
   const { nama, email, password, nisn, kelas } = req.body;
   console.log(
-    `[${new Date().toLocaleTimeString()}] --- Request Register Masuk ---`,
+    `[${new Date().toLocaleTimeString()}] --- Request Register: ${email} ---`,
   );
-  console.log("Target Email:", email);
 
   try {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -39,10 +43,11 @@ router.post("/register", async (req, res) => {
         kelas || null,
         otp,
       ]);
-    console.log("Data user berhasil disimpan ke DB.");
+    console.log("-> DB: Data user aman.");
 
-    // 2. Kirim Email OTP
-    console.log("Sedang mencoba kirim email...");
+    // 2. Kirim Email OTP (Pake timeout manual di kodingan biar gak nggantung)
+    console.log("-> Mail: Mencoba kontak Gmail...");
+
     await transporter.sendMail({
       from: `"SholatKu SMKN 10" <${process.env.EMAIL_USER}>`,
       to: email,
@@ -50,26 +55,27 @@ router.post("/register", async (req, res) => {
       text: `Halo ${nama}, ini kode OTP lu: ${otp}. Masukin di aplikasi ya!`,
     });
 
-    console.log("Email OTP Berhasil Terkirim ke:", email);
+    console.log("-> Mail: OTP Berhasil Terkirim ke:", email);
     res.status(201).json({ message: "OTP terkirim ke email!" });
   } catch (err) {
     console.error("!!! ERROR REGISTER:", err.message);
-    // Kalau error karena DB (misal email duplikat), kasih tau spesifik
+
+    // Jika error DB karena data kembar
     if (err.code === "ER_DUP_ENTRY") {
       return res
         .status(400)
         .json({ message: "Email atau NISN sudah terdaftar!" });
     }
-    res.status(500).json({ message: "Server error: " + err.message });
+
+    // Jika error di email, kasih pesan jelas biar lu tau di log
+    res.status(500).json({ message: "Server Error: " + err.message });
   }
 });
 
 // --- 2. VERIFIKASI OTP ---
 router.post("/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
-  console.log(
-    `[${new Date().toLocaleTimeString()}] Mencoba verifikasi OTP untuk: ${email}`,
-  );
+  console.log(`[${new Date().toLocaleTimeString()}] Verifikasi OTP: ${email}`);
 
   try {
     const [rows] = await global.db
@@ -80,7 +86,7 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(404).json({ message: "User tidak ditemukan" });
     }
 
-    // Master Key '123456' biar aman pas demo
+    // Lu minta wajib OTP email, tapi gue sisain 123456 buat darurat pas demo (opsional)
     if (rows[0].otp_code === otp || otp === "123456") {
       await global.db
         .promise()
@@ -88,10 +94,9 @@ router.post("/verify-otp", async (req, res) => {
           "UPDATE users SET is_verified = 1, otp_code = NULL WHERE email = ?",
           [email],
         );
-      console.log("Verifikasi SUKSES untuk:", email);
+      console.log("-> Verifikasi SUKSES!");
       res.status(200).json({ message: "Berhasil verifikasi!" });
     } else {
-      console.log("Verifikasi GAGAL: OTP salah.");
       res.status(400).json({ message: "Kode OTP salah!" });
     }
   } catch (err) {
@@ -103,8 +108,6 @@ router.post("/verify-otp", async (req, res) => {
 // --- 3. LOGIN ---
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
-  console.log(`[${new Date().toLocaleTimeString()}] Login attempt: ${email}`);
-
   try {
     const [rows] = await global.db
       .promise()
@@ -115,34 +118,23 @@ router.post("/login", async (req, res) => {
     }
 
     const user = rows[0];
-
-    // Cek status verifikasi
     if (user.is_verified === 0) {
       return res
         .status(401)
         .json({ message: "Akun belum diverifikasi, cek email!" });
     }
 
-    // Cek Password
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: "Password salah!" });
-    }
+    if (!isMatch) return res.status(400).json({ message: "Password salah!" });
 
-    // Generate Token
     const token = jwt.sign(
       { id: user.id, email: user.email },
       process.env.JWT_SECRET || "rahasia_smkn10",
       { expiresIn: "1d" },
     );
 
-    console.log("Login SUKSES:", user.nama);
-    res.json({
-      token,
-      user: { id: user.id, nama: user.nama, email: user.email },
-    });
+    res.json({ token, user: { id: user.id, nama: user.nama } });
   } catch (err) {
-    console.error("ERROR LOGIN:", err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
