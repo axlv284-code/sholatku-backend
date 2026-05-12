@@ -4,7 +4,6 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
-// Konfigurasi Email
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -13,34 +12,42 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// --- 1. REGISTER + OTP ---
+// REGISTER
 router.post("/register", async (req, res) => {
-  const { nama, email, password } = req.body;
+  const { nama, email, password, nisn, kelas } = req.body;
+  console.log("--- Menerima Request Register ---");
+  console.log("Data:", { nama, email, nisn });
+
   try {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // MASUKIN KE DB (Pake global.db.promise)
+    // Pastiin kolom ini ada semua di Railway lu!
+    const sql =
+      "INSERT INTO users (nama, email, password, nisn, kelas, otp_code, is_verified) VALUES (?, ?, ?, ?, ?, ?, 0)";
     await global.db
       .promise()
-      .query(
-        "INSERT INTO users (nama, email, password, otp_code, is_verified) VALUES (?, ?, ?, ?, 0)",
-        [nama, email, hashedPassword, otp],
-      );
+      .query(sql, [
+        nama,
+        email,
+        hashedPassword,
+        nisn || null,
+        kelas || null,
+        otp,
+      ]);
 
-    // KIRIM EMAIL
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
-      subject: "Kode OTP SholatKu",
+      subject: "OTP SholatKu",
       text: `Halo ${nama}, kode OTP lu: ${otp}`,
     });
 
-    res.status(201).json({ message: "User terdaftar, cek email!" });
+    res.status(201).json({ message: "OTP terkirim ke email!" });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Gagal daftar: " + err.message });
+    console.error("ERROR REGISTER:", err.message);
+    res.status(500).json({ message: err.message });
   }
 });
 
